@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  FormantCorrectionNode,
-} from "@soundtouchjs/formant-correction-worklet";
+import { FormantCorrectionNode } from "@soundtouchjs/formant-correction-worklet";
 import processorUrl from "@soundtouchjs/formant-correction-worklet/processor?url";
 import "./styles.css";
 
