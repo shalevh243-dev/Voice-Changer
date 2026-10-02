@@ -97,6 +97,8 @@ function makeDistortionCurve(amount: number) {
 
 export default function App() {
   const [running, setRunning] = useState(false);
+  const [testingMic, setTestingMic] = useState(false);
+
   const [preset, setPreset] =
     useState<PresetName>("Normal");
 
@@ -145,6 +147,9 @@ export default function App() {
     useRef<AnalyserNode | null>(null);
 
   const animationRef =
+    useRef<number | null>(null);
+
+  const stopTimerRef =
     useRef<number | null>(null);
 
   const updateAudio = () => {
@@ -200,199 +205,204 @@ export default function App() {
     }
   };
 
-  const start = async () => {
-    try {
-      setError("");
+  const createAudioEngine = async (
+    monitor: boolean
+  ) => {
+    const stream =
+      await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      });
 
-      const stream =
-        await navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: 1,
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-          },
-        });
+    streamRef.current = stream;
 
-      streamRef.current = stream;
+    const context =
+      new AudioContext({
+        latencyHint: "interactive",
+      });
 
-      const context =
-        new AudioContext({
-          latencyHint: "interactive",
-        });
+    contextRef.current = context;
 
-      contextRef.current = context;
+    await context.resume();
 
-      await context.resume();
+    const source =
+      context.createMediaStreamSource(stream);
 
-      const source =
-        context.createMediaStreamSource(stream);
+    sourceRef.current = source;
 
-      sourceRef.current = source;
+    /*
+     * INPUT
+     */
+    const input =
+      context.createGain();
 
-      /*
-       * INPUT GAIN
-       */
-      const input =
-        context.createGain();
+    input.gain.value = 1;
 
-      input.gain.value = 1;
+    /*
+     * HIGH PASS
+     */
+    const highpass =
+      context.createBiquadFilter();
 
-      /*
-       * HIGH PASS
-       */
-      const highpass =
-        context.createBiquadFilter();
+    highpass.type = "highpass";
+    highpass.frequency.value = 70;
+    highpass.Q.value = 0.7;
 
-      highpass.type = "highpass";
-      highpass.frequency.value = 70;
-      highpass.Q.value = 0.7;
+    highpassRef.current = highpass;
 
-      highpassRef.current = highpass;
+    /*
+     * LOW PASS
+     */
+    const lowpass =
+      context.createBiquadFilter();
 
-      /*
-       * LOW PASS
-       */
-      const lowpass =
-        context.createBiquadFilter();
+    lowpass.type = "lowpass";
+    lowpass.frequency.value = 14000;
+    lowpass.Q.value = 0.7;
 
-      lowpass.type = "lowpass";
-      lowpass.frequency.value = 14000;
-      lowpass.Q.value = 0.7;
+    lowpassRef.current = lowpass;
 
-      lowpassRef.current = lowpass;
+    /*
+     * DISTORTION
+     */
+    const distortionNode =
+      context.createWaveShaper();
 
-      /*
-       * DISTORTION
-       */
-      const distortionNode =
-        context.createWaveShaper();
+    distortionNode.oversample = "4x";
 
-      distortionNode.oversample = "4x";
+    distortionNode.curve =
+      makeDistortionCurve(distortion);
 
-      distortionNode.curve =
-        makeDistortionCurve(distortion);
+    distortionRef.current =
+      distortionNode;
 
-      distortionRef.current =
-        distortionNode;
+    /*
+     * ECHO
+     */
+    const delay =
+      context.createDelay(1);
 
-      /*
-       * ECHO
-       */
-      const delay =
-        context.createDelay(1);
+    delay.delayTime.value = 0.09;
 
-      delay.delayTime.value = 0.09;
+    delayRef.current = delay;
 
-      delayRef.current = delay;
+    const delayGain =
+      context.createGain();
 
-      const delayGain =
-        context.createGain();
+    delayGain.gain.value = echo;
 
-      delayGain.gain.value = echo;
+    delayGainRef.current =
+      delayGain;
 
-      delayGainRef.current =
-        delayGain;
+    /*
+     * OUTPUT
+     */
+    const output =
+      context.createGain();
 
-      /*
-       * OUTPUT
-       */
-      const output =
-        context.createGain();
+    output.gain.value = volume;
 
-      output.gain.value = volume;
+    outputRef.current = output;
 
-      outputRef.current = output;
+    /*
+     * ANALYSER
+     */
+    const analyser =
+      context.createAnalyser();
 
-      /*
-       * ANALYSER
-       */
-      const analyser =
-        context.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.8;
 
-      analyser.fftSize = 512;
-      analyser.smoothingTimeConstant = 0.8;
+    analyserRef.current =
+      analyser;
 
-      analyserRef.current =
-        analyser;
+    /*
+     * ROBOT
+     */
+    const robotOsc =
+      context.createOscillator();
 
-      /*
-       * ROBOT OSCILLATOR
-       */
-      const robotOsc =
-        context.createOscillator();
+    robotOsc.type = "square";
+    robotOsc.frequency.value = 30;
 
-      robotOsc.type = "square";
-      robotOsc.frequency.value = 30;
+    robotOscRef.current =
+      robotOsc;
 
-      robotOscRef.current =
-        robotOsc;
+    const robotGain =
+      context.createGain();
 
-      const robotGain =
-        context.createGain();
+    robotGain.gain.value = robot;
 
-      robotGain.gain.value = robot;
+    robotGainRef.current =
+      robotGain;
 
-      robotGainRef.current =
-        robotGain;
+    /*
+     * AUDIO CHAIN
+     */
+    source.connect(input);
 
-      /*
-       * MAIN AUDIO CHAIN
-       *
-       * MIC
-       * ↓
-       * INPUT
-       * ↓
-       * FILTER
-       * ↓
-       * DISTORTION
-       * ↓
-       * LOWPASS
-       * ↓
-       * OUTPUT
-       */
-      source.connect(input);
+    input.connect(highpass);
 
-      input.connect(highpass);
+    highpass.connect(
+      distortionNode
+    );
 
-      highpass.connect(distortionNode);
+    distortionNode.connect(
+      lowpass
+    );
 
-      distortionNode.connect(lowpass);
+    lowpass.connect(output);
 
-      lowpass.connect(output);
+    /*
+     * ECHO
+     */
+    lowpass.connect(delay);
 
-      /*
-       * ECHO
-       */
-      lowpass.connect(delay);
+    delay.connect(delayGain);
 
-      delay.connect(delayGain);
+    delayGain.connect(output);
 
-      delayGain.connect(output);
+    /*
+     * ROBOT
+     */
+    robotOsc.connect(robotGain);
 
-      /*
-       * Robot layer.
-       */
-      robotOsc.connect(robotGain);
+    robotGain.connect(output);
 
-      robotGain.connect(output);
+    /*
+     * FINAL ANALYSER
+     */
+    output.connect(analyser);
 
-      /*
-       * FINAL
-       */
-      output.connect(analyser);
-
+    /*
+     * אם זה test:
+     * הקול המעובד מגיע לאוזניות.
+     */
+    if (monitor) {
       analyser.connect(
         context.destination
       );
+    }
 
-      robotOsc.start();
+    robotOsc.start();
+
+    updateAudio();
+
+    startMeter();
+  };
+
+  const startVoiceChanger = async () => {
+    try {
+      setError("");
+
+      await createAudioEngine(true);
 
       setRunning(true);
-
-      updateAudio();
-
-      startMeter();
+      setTestingMic(false);
     } catch (err) {
       console.error(err);
 
@@ -401,10 +411,60 @@ export default function App() {
           ? err.message
           : "לא ניתן לגשת למיקרופון."
       );
+
+      stop();
+    }
+  };
+
+  const testMicrophone = async () => {
+    try {
+      setError("");
+
+      /*
+       * אם כבר פועל:
+       * לא צריך לפתוח מיקרופון נוסף.
+       */
+      if (running) {
+        return;
+      }
+
+      setTestingMic(true);
+
+      await createAudioEngine(true);
+
+      /*
+       * בדיקת מיקרופון ל-10 שניות.
+       */
+      stopTimerRef.current =
+        window.setTimeout(() => {
+          stop();
+
+          setTestingMic(false);
+        }, 10000);
+    } catch (err) {
+      console.error(err);
+
+      setTestingMic(false);
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "בדיקת המיקרופון נכשלה."
+      );
+
+      stop();
     }
   };
 
   const stop = () => {
+    if (stopTimerRef.current !== null) {
+      clearTimeout(
+        stopTimerRef.current
+      );
+
+      stopTimerRef.current = null;
+    }
+
     if (animationRef.current !== null) {
       cancelAnimationFrame(
         animationRef.current
@@ -434,21 +494,27 @@ export default function App() {
     contextRef.current = null;
 
     sourceRef.current = null;
+
     outputRef.current = null;
 
     distortionRef.current = null;
 
     delayRef.current = null;
+
     delayGainRef.current = null;
 
     highpassRef.current = null;
+
     lowpassRef.current = null;
 
     robotOscRef.current = null;
+
     robotGainRef.current = null;
+
     analyserRef.current = null;
 
     setRunning(false);
+    setTestingMic(false);
   };
 
   const startMeter = () => {
@@ -467,7 +533,9 @@ export default function App() {
         return;
       }
 
-      analyser.getByteTimeDomainData(data);
+      analyser.getByteTimeDomainData(
+        data
+      );
 
       animationRef.current =
         requestAnimationFrame(tick);
@@ -485,14 +553,17 @@ export default function App() {
     setPreset(name);
 
     setPitch(settings.pitch);
-    setDistortion(settings.distortion);
+
+    setDistortion(
+      settings.distortion
+    );
+
     setEcho(settings.echo);
+
     setRobot(settings.robot);
+
     setVolume(settings.volume);
 
-    /*
-     * Radio filter.
-     */
     if (highpassRef.current) {
       highpassRef.current.frequency.value =
         settings.highpass;
@@ -536,20 +607,25 @@ export default function App() {
           </h1>
 
           <p>
-            Transform your microphone
-            audio in real time.
+            Test your microphone and hear
+            the processed voice in real time.
           </p>
         </div>
 
         <div
           className={`status ${
-            running ? "online" : ""
+            running || testingMic
+              ? "online"
+              : ""
           }`}
         >
           <span />
-          {running
-            ? "MIC ACTIVE"
-            : "OFFLINE"}
+
+          {testingMic
+            ? "MIC TEST"
+            : running
+              ? "MIC ACTIVE"
+              : "OFFLINE"}
         </div>
       </section>
 
@@ -557,13 +633,15 @@ export default function App() {
         <div className="visualizer-header">
           <div>
             <span className="small-label">
-              AUDIO ENGINE
+              MICROPHONE
             </span>
 
             <strong>
-              {running
-                ? "Processing microphone"
-                : "Microphone stopped"}
+              {testingMic
+                ? "Testing microphone..."
+                : running
+                  ? "Voice processing active"
+                  : "Ready"}
             </strong>
           </div>
         </div>
@@ -572,9 +650,10 @@ export default function App() {
           <div
             className="meter-fill"
             style={{
-              width: running
-                ? "75%"
-                : "3%",
+              width:
+                running || testingMic
+                  ? "75%"
+                  : "3%",
             }}
           />
         </div>
@@ -694,7 +773,10 @@ export default function App() {
               <span>Echo</span>
 
               <strong>
-                {Math.round(echo * 100)}%
+                {Math.round(
+                  echo * 100
+                )}
+                %
               </strong>
             </div>
 
@@ -717,7 +799,10 @@ export default function App() {
               <span>Robot</span>
 
               <strong>
-                {Math.round(robot * 100)}%
+                {Math.round(
+                  robot * 100
+                )}
+                %
               </strong>
             </div>
 
@@ -770,25 +855,46 @@ export default function App() {
       )}
 
       <section className="action-area">
-        {!running ? (
-          <button
-            className="start-button"
-            onClick={start}
-          >
-            🎙 Start Voice Changer
-          </button>
-        ) : (
+        {!running && !testingMic && (
+          <>
+            <button
+              className="start-button"
+              onClick={
+                startVoiceChanger
+              }
+            >
+              🎙 Start Voice Changer
+            </button>
+
+            <button
+              className="radio-toggle"
+              onClick={
+                testMicrophone
+              }
+              style={{
+                marginTop: "12px",
+              }}
+            >
+              🎧 Test My Microphone
+              <small>
+                10 SEC
+              </small>
+            </button>
+          </>
+        )}
+
+        {(running || testingMic) && (
           <button
             className="stop-button"
             onClick={stop}
           >
-            ■ Stop Voice Changer
+            ■ Stop
           </button>
         )}
 
         <p>
-          Use headphones to avoid
-          microphone feedback.
+          מומלץ להשתמש באוזניות כדי
+          למנוע Feedback.
         </p>
       </section>
     </main>
