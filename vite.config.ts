@@ -8,7 +8,7 @@ export default defineConfig({
     host: "0.0.0.0",
 
     allowedHosts: [
-      "voice-changer-z366.onrender.com",
-    ],
-  },
+      "voice-changer-z366.onrender.com"
+    ]
+  }
 });
