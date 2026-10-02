@@ -9,12 +9,15 @@
     ],
 
     "module": "ESNext",
+
     "skipLibCheck": true,
 
     "moduleResolution": "Bundler",
 
     "allowImportingTsExtensions": true,
+
     "verbatimModuleSyntax": true,
+
     "moduleDetection": "force",
 
     "noEmit": true,
