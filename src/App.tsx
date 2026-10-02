@@ -1,6 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { FormantCorrectionNode } from "@soundtouchjs/formant-correction-worklet";
-import processorUrl from "@soundtouchjs/formant-correction-worklet/processor?url";
 import "./styles.css";
 
 type PresetName =
@@ -9,99 +7,88 @@ type PresetName =
   | "High"
   | "Robot"
   | "Alien"
-  | "Radio"
-  | "Anonymous";
+  | "Radio";
 
-type Preset = {
+type Settings = {
   pitch: number;
-  timbre: number;
-  volume: number;
-  echo: number;
   distortion: number;
+  echo: number;
   robot: number;
-  radio: boolean;
+  lowpass: number;
+  highpass: number;
+  volume: number;
 };
 
-const PRESETS: Record<PresetName, Preset> = {
+const PRESETS: Record<PresetName, Settings> = {
   Normal: {
     pitch: 0,
-    timbre: 0,
-    volume: 0.85,
-    echo: 0,
     distortion: 0,
+    echo: 0,
     robot: 0,
-    radio: false,
+    lowpass: 14000,
+    highpass: 60,
+    volume: 0.8,
   },
 
   Deep: {
-    pitch: -8,
-    timbre: -0.7,
-    volume: 0.82,
-    echo: 0.08,
+    pitch: -7,
     distortion: 0.08,
+    echo: 0.05,
     robot: 0,
-    radio: false,
+    lowpass: 6500,
+    highpass: 90,
+    volume: 0.8,
   },
 
   High: {
-    pitch: 8,
-    timbre: 0.6,
-    volume: 0.8,
-    echo: 0.06,
+    pitch: 7,
     distortion: 0.08,
+    echo: 0.04,
     robot: 0,
-    radio: false,
+    lowpass: 14000,
+    highpass: 100,
+    volume: 0.78,
   },
 
   Robot: {
-    pitch: -3,
-    timbre: -0.3,
-    volume: 0.8,
+    pitch: -2,
+    distortion: 0.4,
     echo: 0.12,
-    distortion: 0.3,
-    robot: 0.95,
-    radio: false,
+    robot: 0.9,
+    lowpass: 7500,
+    highpass: 120,
+    volume: 0.7,
   },
 
   Alien: {
-    pitch: 10,
-    timbre: 0.8,
-    volume: 0.75,
-    echo: 0.22,
-    distortion: 0.22,
+    pitch: 8,
+    distortion: 0.3,
+    echo: 0.2,
     robot: 0.65,
-    radio: false,
+    lowpass: 9000,
+    highpass: 180,
+    volume: 0.7,
   },
 
   Radio: {
-    pitch: -2,
-    timbre: -0.15,
-    volume: 0.7,
-    echo: 0.1,
+    pitch: -1,
     distortion: 0.35,
+    echo: 0.08,
     robot: 0,
-    radio: true,
-  },
-
-  Anonymous: {
-    pitch: -6,
-    timbre: -0.85,
-    volume: 0.78,
-    echo: 0.05,
-    distortion: 0.18,
-    robot: 0.2,
-    radio: false,
+    lowpass: 3200,
+    highpass: 500,
+    volume: 0.7,
   },
 };
 
-function createDistortionCurve(amount: number): WaveShaperNode["curve"] {
-  const samples = 44100;
-  const curve = new Float32Array(samples);
+function makeDistortionCurve(amount: number) {
+  const size = 44100;
+  const curve = new Float32Array(size);
 
-  const drive = 1 + amount * 80;
+  const drive = 1 + amount * 40;
 
-  for (let i = 0; i < samples; i++) {
-    const x = (i * 2) / samples - 1;
+  for (let i = 0; i < size; i++) {
+    const x = (i * 2) / size - 1;
     curve[i] = Math.tanh(x * drive);
   }
 
@@ -110,226 +97,133 @@ function createDistortionCurve(amount: number): WaveShaperNode["curve"] {
 
 export default function App() {
   const [running, setRunning] = useState(false);
-
-  const [pitch, setPitch] = useState(0);
-  const [timbre, setTimbre] = useState(0);
-  const [volume, setVolume] = useState(0.85);
-  const [echo, setEcho] = useState(0);
-  const [distortion, setDistortion] = useState(0);
-  const [robot, setRobot] = useState(0);
-  const [radio, setRadio] = useState(false);
-
-  const [activePreset, setActivePreset] =
+  const [preset, setPreset] =
     useState<PresetName>("Normal");
 
+  const [pitch, setPitch] = useState(0);
+  const [distortion, setDistortion] = useState(0);
+  const [echo, setEcho] = useState(0);
+  const [robot, setRobot] = useState(0);
+  const [volume, setVolume] = useState(0.8);
+
   const [error, setError] = useState("");
-  const [level, setLevel] = useState(0);
 
-  const contextRef = useRef<AudioContext | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const contextRef =
+    useRef<AudioContext | null>(null);
 
-  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const pitchNodeRef = useRef<FormantCorrectionNode | null>(null);
+  const streamRef =
+    useRef<MediaStream | null>(null);
 
-  const distortionNodeRef = useRef<WaveShaperNode | null>(null);
+  const sourceRef =
+    useRef<MediaStreamAudioSourceNode | null>(null);
 
-  const highpassRef = useRef<BiquadFilterNode | null>(null);
-  const lowpassRef = useRef<BiquadFilterNode | null>(null);
+  const outputRef =
+    useRef<GainNode | null>(null);
 
-  const lowShelfRef = useRef<BiquadFilterNode | null>(null);
-  const midRef = useRef<BiquadFilterNode | null>(null);
-  const highShelfRef = useRef<BiquadFilterNode | null>(null);
+  const distortionRef =
+    useRef<WaveShaperNode | null>(null);
 
-  const outputGainRef = useRef<GainNode | null>(null);
+  const delayRef =
+    useRef<DelayNode | null>(null);
 
-  const delayRef = useRef<DelayNode | null>(null);
-  const delayGainRef = useRef<GainNode | null>(null);
+  const delayGainRef =
+    useRef<GainNode | null>(null);
 
-  const robotOscRef = useRef<OscillatorNode | null>(null);
-  const robotGainRef = useRef<GainNode | null>(null);
+  const highpassRef =
+    useRef<BiquadFilterNode | null>(null);
 
-  const analyserRef = useRef<AnalyserNode | null>(null);
+  const lowpassRef =
+    useRef<BiquadFilterNode | null>(null);
 
-  const animationRef = useRef<number | null>(null);
+  const robotOscRef =
+    useRef<OscillatorNode | null>(null);
 
-  const updateAudioParameters = () => {
+  const robotGainRef =
+    useRef<GainNode | null>(null);
+
+  const analyserRef =
+    useRef<AnalyserNode | null>(null);
+
+  const animationRef =
+    useRef<number | null>(null);
+
+  const updateAudio = () => {
     const ctx = contextRef.current;
 
     if (!ctx) return;
 
-    const pitchNode = pitchNodeRef.current;
-    const distortionNode = distortionNodeRef.current;
-
-    const highpass = highpassRef.current;
-    const lowpass = lowpassRef.current;
-
-    const lowShelf = lowShelfRef.current;
-    const mid = midRef.current;
-    const highShelf = highShelfRef.current;
-
-    const outputGain = outputGainRef.current;
-
-    const delayGain = delayGainRef.current;
-
-    const robotGain = robotGainRef.current;
-
     const now = ctx.currentTime;
 
-    if (pitchNode) {
-      /*
-       * formantStrength = 0 means:
-       * do NOT preserve the original formant envelope.
-       *
-       * This intentionally gives a much stronger pitch/timbre change.
-       */
-      pitchNode.pitchSemitones.setTargetAtTime(
-        pitch,
-        now,
-        0.015
-      );
+    if (distortionRef.current) {
+      distortionRef.current.curve =
+        makeDistortionCurve(distortion);
+    }
 
-      pitchNode.formantStrength.setTargetAtTime(
-        0,
+    if (delayGainRef.current) {
+      delayGainRef.current.gain.setTargetAtTime(
+        echo,
         now,
-        0.015
+        0.03
       );
     }
 
-    if (distortionNode) {
-      distortionNode.curve = createDistortionCurve(
-        distortion
-      );
-    }
-
-    if (outputGain) {
-      outputGain.gain.setTargetAtTime(
+    if (outputRef.current) {
+      outputRef.current.gain.setTargetAtTime(
         volume,
         now,
-        0.02
+        0.03
       );
     }
 
-    if (delayGain) {
-      delayGain.gain.setTargetAtTime(
-        echo * 0.55,
-        now,
-        0.02
-      );
-    }
-
-    /*
-     * TIMBRE SECTION
-     *
-     * Positive values:
-     * brighter / thinner
-     *
-     * Negative values:
-     * darker / heavier
-     */
-
-    if (lowShelf) {
-      lowShelf.gain.setTargetAtTime(
-        timbre * -14,
+    if (highpassRef.current) {
+      highpassRef.current.frequency.setTargetAtTime(
+        pitch < -3 ? 100 : 70,
         now,
         0.03
       );
     }
 
-    if (mid) {
-      mid.gain.setTargetAtTime(
-        timbre * 10,
-        now,
-        0.03
-      );
-
-      mid.Q.setTargetAtTime(
-        1.3 + Math.abs(timbre) * 2,
+    if (lowpassRef.current) {
+      lowpassRef.current.frequency.setTargetAtTime(
+        pitch > 3 ? 11000 : 14000,
         now,
         0.03
       );
     }
 
-    if (highShelf) {
-      highShelf.gain.setTargetAtTime(
-        timbre * 16,
-        now,
-        0.03
-      );
-    }
-
-    /*
-     * Stronger voice reshaping.
-     */
-    if (highpass) {
-      const hpFrequency = radio
-        ? 500
-        : 70 + Math.max(0, -timbre) * 90;
-
-      highpass.frequency.setTargetAtTime(
-        hpFrequency,
-        now,
-        0.03
-      );
-    }
-
-    if (lowpass) {
-      const lpFrequency = radio
-        ? 3200
-        : 12500 - Math.max(0, -timbre) * 5000;
-
-      lowpass.frequency.setTargetAtTime(
-        lpFrequency,
-        now,
-        0.03
-      );
-    }
-
-    if (robotGain) {
-      robotGain.gain.setTargetAtTime(
+    if (robotGainRef.current) {
+      robotGainRef.current.gain.setTargetAtTime(
         robot,
         now,
-        0.02
+        0.03
       );
     }
   };
 
-  const startAudio = async () => {
+  const start = async () => {
     try {
       setError("");
-
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error(
-          "הדפדפן לא תומך בגישה למיקרופון."
-        );
-      }
 
       const stream =
         await navigator.mediaDevices.getUserMedia({
           audio: {
-            echoCancellation: false,
-            autoGainControl: false,
-            noiseSuppression: false,
             channelCount: 1,
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
           },
         });
 
       streamRef.current = stream;
 
-      const context = new AudioContext({
-        latencyHint: "interactive",
-      });
+      const context =
+        new AudioContext({
+          latencyHint: "interactive",
+        });
 
       contextRef.current = context;
 
       await context.resume();
-
-      /*
-       * Register SoundTouch formant processor.
-       */
-      await FormantCorrectionNode.register(
-        context,
-        processorUrl
-      );
 
       const source =
         context.createMediaStreamSource(stream);
@@ -337,41 +231,15 @@ export default function App() {
       sourceRef.current = source;
 
       /*
-       * REAL PITCH SHIFTER
+       * INPUT GAIN
        */
-      const pitchNode =
-        new FormantCorrectionNode({
-          context,
-          outputChannelCount: 1,
-        });
+      const input =
+        context.createGain();
 
-      pitchNodeRef.current = pitchNode;
-
-      pitchNode.pitch.value = 1;
-      pitchNode.pitchSemitones.value = pitch;
+      input.gain.value = 1;
 
       /*
-       * Intentionally 0:
-       * maximum natural-formant removal from pitch shifting.
-       */
-      pitchNode.formantStrength.value = 0;
-
-      /*
-       * DISTORTION
-       */
-      const distortionNode =
-        context.createWaveShaper();
-
-      distortionNode.oversample = "4x";
-
-      distortionNode.curve =
-        createDistortionCurve(distortion);
-
-      distortionNodeRef.current =
-        distortionNode;
-
-      /*
-       * VOICE SHAPING FILTERS
+       * HIGH PASS
        */
       const highpass =
         context.createBiquadFilter();
@@ -382,50 +250,39 @@ export default function App() {
 
       highpassRef.current = highpass;
 
+      /*
+       * LOW PASS
+       */
       const lowpass =
         context.createBiquadFilter();
 
       lowpass.type = "lowpass";
-      lowpass.frequency.value = 12500;
+      lowpass.frequency.value = 14000;
       lowpass.Q.value = 0.7;
 
       lowpassRef.current = lowpass;
 
-      const lowShelf =
-        context.createBiquadFilter();
+      /*
+       * DISTORTION
+       */
+      const distortionNode =
+        context.createWaveShaper();
 
-      lowShelf.type = "lowshelf";
-      lowShelf.frequency.value = 180;
-      lowShelf.gain.value = 0;
+      distortionNode.oversample = "4x";
 
-      lowShelfRef.current = lowShelf;
+      distortionNode.curve =
+        makeDistortionCurve(distortion);
 
-      const mid =
-        context.createBiquadFilter();
-
-      mid.type = "peaking";
-      mid.frequency.value = 1100;
-      mid.Q.value = 1.5;
-      mid.gain.value = 0;
-
-      midRef.current = mid;
-
-      const highShelf =
-        context.createBiquadFilter();
-
-      highShelf.type = "highshelf";
-      highShelf.frequency.value = 3500;
-      highShelf.gain.value = 0;
-
-      highShelfRef.current = highShelf;
+      distortionRef.current =
+        distortionNode;
 
       /*
        * ECHO
        */
       const delay =
-        context.createDelay(1.0);
+        context.createDelay(1);
 
-      delay.delayTime.value = 0.075;
+      delay.delayTime.value = 0.09;
 
       delayRef.current = delay;
 
@@ -434,17 +291,18 @@ export default function App() {
 
       delayGain.gain.value = echo;
 
-      delayGainRef.current = delayGain;
+      delayGainRef.current =
+        delayGain;
 
       /*
        * OUTPUT
        */
-      const outputGain =
+      const output =
         context.createGain();
 
-      outputGain.gain.value = volume;
+      output.gain.value = volume;
 
-      outputGainRef.current = outputGain;
+      outputRef.current = output;
 
       /*
        * ANALYSER
@@ -455,80 +313,74 @@ export default function App() {
       analyser.fftSize = 512;
       analyser.smoothingTimeConstant = 0.8;
 
-      analyserRef.current = analyser;
+      analyserRef.current =
+        analyser;
 
       /*
-       * ROBOT / RING-MOD STYLE EFFECT
+       * ROBOT OSCILLATOR
        */
       const robotOsc =
         context.createOscillator();
 
       robotOsc.type = "square";
-      robotOsc.frequency.value = 32;
+      robotOsc.frequency.value = 30;
 
-      robotOscRef.current = robotOsc;
+      robotOscRef.current =
+        robotOsc;
 
       const robotGain =
         context.createGain();
 
-      robotGain.gain.value = 0;
+      robotGain.gain.value = robot;
 
-      robotGainRef.current = robotGain;
+      robotGainRef.current =
+        robotGain;
 
       /*
-       * Main chain
+       * MAIN AUDIO CHAIN
        *
-       * Mic
-       *   ↓
-       * Pitch
-       *   ↓
-       * Distortion
-       *   ↓
-       * EQ / Timbre
-       *   ↓
-       * Low/High filtering
-       *   ↓
-       * Output
+       * MIC
+       * ↓
+       * INPUT
+       * ↓
+       * FILTER
+       * ↓
+       * DISTORTION
+       * ↓
+       * LOWPASS
+       * ↓
+       * OUTPUT
        */
-      source.connect(pitchNode);
+      source.connect(input);
 
-      pitchNode.connect(distortionNode);
+      input.connect(highpass);
 
-      distortionNode.connect(lowShelf);
+      highpass.connect(distortionNode);
 
-      lowShelf.connect(mid);
+      distortionNode.connect(lowpass);
 
-      mid.connect(highShelf);
-
-      highShelf.connect(highpass);
-
-      highpass.connect(lowpass);
+      lowpass.connect(output);
 
       /*
-       * Main output.
-       */
-      lowpass.connect(outputGain);
-
-      /*
-       * Echo path.
+       * ECHO
        */
       lowpass.connect(delay);
 
       delay.connect(delayGain);
 
-      delayGain.connect(outputGain);
+      delayGain.connect(output);
 
       /*
-       * Robot modulation layer.
+       * Robot layer.
        */
       robotOsc.connect(robotGain);
 
-      robotGain.connect(outputGain);
+      robotGain.connect(output);
 
       /*
-       * Final output.
+       * FINAL
        */
-      outputGain.connect(analyser);
+      output.connect(analyser);
 
       analyser.connect(
         context.destination
@@ -538,23 +390,21 @@ export default function App() {
 
       setRunning(true);
 
-      updateAudioParameters();
+      updateAudio();
 
-      startVisualizer();
+      startMeter();
     } catch (err) {
       console.error(err);
 
       setError(
         err instanceof Error
           ? err.message
-          : "לא ניתן להפעיל את המיקרופון."
+          : "לא ניתן לגשת למיקרופון."
       );
-
-      stopAudio();
     }
   };
 
-  const stopAudio = () => {
+  const stop = () => {
     if (animationRef.current !== null) {
       cancelAnimationFrame(
         animationRef.current
@@ -563,13 +413,17 @@ export default function App() {
       animationRef.current = null;
     }
 
-    robotOscRef.current?.stop();
-
-    robotOscRef.current = null;
+    try {
+      robotOscRef.current?.stop();
+    } catch {
+      // already stopped
+    }
 
     streamRef.current
       ?.getTracks()
-      .forEach((track) => track.stop());
+      .forEach((track) => {
+        track.stop();
+      });
 
     streamRef.current = null;
 
@@ -580,30 +434,24 @@ export default function App() {
     contextRef.current = null;
 
     sourceRef.current = null;
-    pitchNodeRef.current = null;
-    distortionNodeRef.current = null;
+    outputRef.current = null;
 
-    highpassRef.current = null;
-    lowpassRef.current = null;
-
-    lowShelfRef.current = null;
-    midRef.current = null;
-    highShelfRef.current = null;
-
-    outputGainRef.current = null;
+    distortionRef.current = null;
 
     delayRef.current = null;
     delayGainRef.current = null;
 
-    robotGainRef.current = null;
+    highpassRef.current = null;
+    lowpassRef.current = null;
 
+    robotOscRef.current = null;
+    robotGainRef.current = null;
     analyserRef.current = null;
 
-    setLevel(0);
     setRunning(false);
   };
 
-  const startVisualizer = () => {
+  const startMeter = () => {
     const analyser =
       analyserRef.current;
 
@@ -614,73 +462,63 @@ export default function App() {
         analyser.frequencyBinCount
       );
 
-    const draw = () => {
+    const tick = () => {
       if (!analyserRef.current) {
         return;
       }
 
-      analyser.getByteTimeDomainData(
-        data
-      );
-
-      let sum = 0;
-
-      for (const value of data) {
-        const normalized =
-          (value - 128) / 128;
-
-        sum += normalized * normalized;
-      }
-
-      const rms =
-        Math.sqrt(sum / data.length);
-
-      setLevel(
-        Math.min(100, rms * 220)
-      );
+      analyser.getByteTimeDomainData(data);
 
       animationRef.current =
-        requestAnimationFrame(draw);
+        requestAnimationFrame(tick);
     };
 
-    draw();
+    tick();
   };
 
   const applyPreset = (
     name: PresetName
   ) => {
-    const preset = PRESETS[name];
+    const settings =
+      PRESETS[name];
 
-    setActivePreset(name);
+    setPreset(name);
 
-    setPitch(preset.pitch);
-    setTimbre(preset.timbre);
-    setVolume(preset.volume);
-    setEcho(preset.echo);
-    setDistortion(preset.distortion);
-    setRobot(preset.robot);
-    setRadio(preset.radio);
+    setPitch(settings.pitch);
+    setDistortion(settings.distortion);
+    setEcho(settings.echo);
+    setRobot(settings.robot);
+    setVolume(settings.volume);
 
-    setTimeout(() => {
-      updateAudioParameters();
-    }, 0);
+    /*
+     * Radio filter.
+     */
+    if (highpassRef.current) {
+      highpassRef.current.frequency.value =
+        settings.highpass;
+    }
+
+    if (lowpassRef.current) {
+      lowpassRef.current.frequency.value =
+        settings.lowpass;
+    }
+
+    setTimeout(updateAudio, 0);
   };
 
   useEffect(() => {
-    updateAudioParameters();
+    updateAudio();
   }, [
     pitch,
-    timbre,
-    volume,
-    echo,
     distortion,
+    echo,
     robot,
-    radio,
+    volume,
   ]);
 
   useEffect(() => {
     return () => {
-      stopAudio();
+      stop();
     };
   }, []);
 
@@ -698,10 +536,8 @@ export default function App() {
           </h1>
 
           <p>
-            Real-time pitch shifting,
-            timbre transformation and
-            voice effects — directly in
-            your browser.
+            Transform your microphone
+            audio in real time.
           </p>
         </div>
 
@@ -721,18 +557,14 @@ export default function App() {
         <div className="visualizer-header">
           <div>
             <span className="small-label">
-              LIVE SIGNAL
+              AUDIO ENGINE
             </span>
 
             <strong>
               {running
-                ? "Voice processing active"
-                : "Waiting for microphone"}
+                ? "Processing microphone"
+                : "Microphone stopped"}
             </strong>
-          </div>
-
-          <div className="meter-value">
-            {Math.round(level)}%
           </div>
         </div>
 
@@ -740,7 +572,9 @@ export default function App() {
           <div
             className="meter-fill"
             style={{
-              width: `${level}%`,
+              width: running
+                ? "75%"
+                : "3%",
             }}
           />
         </div>
@@ -750,11 +584,11 @@ export default function App() {
         <div className="panel-title">
           <div>
             <span className="small-label">
-              VOICE PRESETS
+              PRESETS
             </span>
 
             <h2>
-              Choose your voice
+              Choose a voice
             </h2>
           </div>
         </div>
@@ -768,7 +602,7 @@ export default function App() {
             <button
               key={name}
               className={
-                activePreset === name
+                preset === name
                   ? "preset active"
                   : "preset"
               }
@@ -783,7 +617,6 @@ export default function App() {
                 {name === "Robot" && "⌬"}
                 {name === "Alien" && "✦"}
                 {name === "Radio" && "▣"}
-                {name === "Anonymous" && "◈"}
               </span>
 
               <span>{name}</span>
@@ -796,7 +629,7 @@ export default function App() {
         <div className="panel-title">
           <div>
             <span className="small-label">
-              AUDIO ENGINE
+              EFFECTS
             </span>
 
             <h2>
@@ -809,9 +642,10 @@ export default function App() {
           <label className="control">
             <div className="control-top">
               <span>Pitch</span>
+
               <strong>
                 {pitch > 0 ? "+" : ""}
-                {pitch} st
+                {pitch} semitones
               </strong>
             </div>
 
@@ -821,83 +655,8 @@ export default function App() {
               max="12"
               step="1"
               value={pitch}
-              onChange={(e) => {
+              onChange={(e) =>
                 setPitch(
-                  Number(e.target.value)
-                );
-
-                setActivePreset(
-                  "Normal"
-                );
-              }}
-            />
-          </label>
-
-          <label className="control">
-            <div className="control-top">
-              <span>Timbre</span>
-              <strong>
-                {timbre > 0 ? "+" : ""}
-                {timbre.toFixed(2)}
-              </strong>
-            </div>
-
-            <input
-              type="range"
-              min="-1"
-              max="1"
-              step="0.01"
-              value={timbre}
-              onChange={(e) => {
-                setTimbre(
-                  Number(e.target.value)
-                );
-
-                setActivePreset(
-                  "Normal"
-                );
-              }}
-            />
-          </label>
-
-          <label className="control">
-            <div className="control-top">
-              <span>Volume</span>
-              <strong>
-                {Math.round(volume * 100)}%
-              </strong>
-            </div>
-
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={volume}
-              onChange={(e) =>
-                setVolume(
-                  Number(e.target.value)
-                )
-              }
-            />
-          </label>
-
-          <label className="control">
-            <div className="control-top">
-              <span>Echo</span>
-              <strong>
-                {Math.round(echo * 100)}%
-              </strong>
-            </div>
-
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={echo}
-              onChange={(e) =>
-                setEcho(
                   Number(e.target.value)
                 )
               }
@@ -907,6 +666,7 @@ export default function App() {
           <label className="control">
             <div className="control-top">
               <span>Distortion</span>
+
               <strong>
                 {Math.round(
                   distortion * 100
@@ -931,7 +691,31 @@ export default function App() {
 
           <label className="control">
             <div className="control-top">
+              <span>Echo</span>
+
+              <strong>
+                {Math.round(echo * 100)}%
+              </strong>
+            </div>
+
+            <input
+              type="range"
+              min="0"
+              max="0.8"
+              step="0.01"
+              value={echo}
+              onChange={(e) =>
+                setEcho(
+                  Number(e.target.value)
+                )
+              }
+            />
+          </label>
+
+          <label className="control">
+            <div className="control-top">
               <span>Robot</span>
+
               <strong>
                 {Math.round(robot * 100)}%
               </strong>
@@ -950,28 +734,33 @@ export default function App() {
               }
             />
           </label>
+
+          <label className="control">
+            <div className="control-top">
+              <span>Volume</span>
+
+              <strong>
+                {Math.round(
+                  volume * 100
+                )}
+                %
+              </strong>
+            </div>
+
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={volume}
+              onChange={(e) =>
+                setVolume(
+                  Number(e.target.value)
+                )
+              }
+            />
+          </label>
         </div>
-
-        <button
-          className={
-            radio
-              ? "radio-toggle active"
-              : "radio-toggle"
-          }
-          onClick={() =>
-            setRadio(!radio)
-          }
-        >
-          <span>
-            {radio ? "●" : "○"}
-          </span>
-
-          Radio / Telephone Filter
-
-          <small>
-            {radio ? "ON" : "OFF"}
-          </small>
-        </button>
       </section>
 
       {error && (
@@ -984,25 +773,22 @@ export default function App() {
         {!running ? (
           <button
             className="start-button"
-            onClick={startAudio}
+            onClick={start}
           >
-            <span>🎙</span>
-            Start Voice Changer
+            🎙 Start Voice Changer
           </button>
         ) : (
           <button
             className="stop-button"
-            onClick={stopAudio}
+            onClick={stop}
           >
-            <span>■</span>
-            Stop
+            ■ Stop Voice Changer
           </button>
         )}
 
         <p>
-          Your microphone audio is
-          processed locally in the
-          browser.
+          Use headphones to avoid
+          microphone feedback.
         </p>
       </section>
     </main>
